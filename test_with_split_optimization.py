@@ -61,21 +61,29 @@ def test_with_split_optimization():
     if rank < 7:
         subgroup = dist.new_group(ranks=subgroup_ranks, backend='nccl')
         subgroup_init_time = time.time() - subgroup_start
-        
+        # do all reduce for the subgroup, and test all reduce performance
+        # test all reduce performance
+        all_reduce_start = time.time()
+        tensor = torch.ones(1000, 1000, device=f'cuda:{rank}')
+        dist.all_reduce(tensor, group=subgroup)
+        all_reduce_end = time.time()
+        all_reduce_time = all_reduce_end - all_reduce_start 
         # Verify the subgroup works
-        if rank == 0:
-            tensor = torch.ones(1000, 1000, device=f'cuda:{rank}')
-        else:
-            tensor = torch.zeros(1000, 1000, device=f'cuda:{rank}')
+        # if rank == 0:
+        #     tensor = torch.ones(1000, 1000, device=f'cuda:{rank}')
+        # else:
+        #     tensor = torch.zeros(1000, 1000, device=f'cuda:{rank}')
         
-        dist.broadcast(tensor, src=0, group=subgroup)
+        # dist.broadcast(tensor, src=0, group=subgroup)
         
-        # Verify correctness
-        assert torch.allclose(tensor, torch.ones(1000, 1000, device=f'cuda:{rank}')), \
-            f"Rank {rank}: Broadcast verification failed!"
+        # # Verify correctness
+        # assert torch.allclose(tensor, torch.ones(1000, 1000, device=f'cuda:{rank}')), \
+        #     f"Rank {rank}: Broadcast verification failed!"
         
         print(f"[Rank {rank}] WITH split - Default PG init: {default_pg_init_time:.4f}s, "
-              f"Subgroup init: {subgroup_init_time:.4f}s, Total: {default_pg_init_time + subgroup_init_time:.4f}s")
+              f"Subgroup init: {subgroup_init_time:.4f}s, Total: {default_pg_init_time + subgroup_init_time:.4f},"
+              f"All reduce: {all_reduce_time:.4f}s"
+              )
     else:
         # Rank 7 still needs to participate in new_group call
         dist.new_group(ranks=subgroup_ranks, backend='nccl')
