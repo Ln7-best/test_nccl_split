@@ -45,8 +45,8 @@ def test_without_split_optimization():
             init_method='env://',
             world_size=7,  # Only 7 ranks participate
             rank=rank,
-            timeout=timedelta(seconds=300)
-            # NO device_id parameter!
+            timeout=timedelta(seconds=300),
+            device_id=torch.device('cuda', rank) 
         )
         
         init_time = time.time() - start_time
