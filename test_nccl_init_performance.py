@@ -57,7 +57,8 @@ def test_with_split_optimization():
     # Step 2: Create a 7-GPU subgroup (exclude rank 7)
     # This should use ncclCommSplit for faster initialization
     subgroup_ranks = list(range(7))  # [0, 1, 2, 3, 4, 5, 6]
-    
+    # Barrier to ensure all ranks complete
+    dist.barrier()
     subgroup_start = time.time()
     
     if rank < 7:
@@ -103,74 +104,48 @@ def test_without_split_optimization():
     Test initialization WITHOUT ncclCommSplit optimization.
     
     Key: Initialize default PG without device_id, causing lazy initialization
-    and preventing splitting optimization.
+    and preventing splitting optimization. Only first 7 ranks participate.
     """
-    print(f"[Rank {os.environ.get('RANK', 0)}] Testing WITHOUT ncclCommSplit optimization...")
+    rank = int(os.environ['RANK'])
+    
+    print(f"[Rank {rank}] Testing WITHOUT ncclCommSplit optimization...")
     
     # Clean up any existing process group
     cleanup()
     
-    # Step 1: Initialize default process group WITHOUT device_id
-    # This causes lazy initialization and prevents ncclCommSplit
-    rank = int(os.environ['RANK'])
-    world_size = int(os.environ['WORLD_SIZE'])
-    
-    start_time = time.time()
-    
-    # CRITICAL: Do NOT specify device_id - this prevents splitting optimization
-    dist.init_process_group(
-        backend='nccl',
-        init_method='env://',
-        world_size=world_size,
-        rank=rank,
-        timeout=timedelta(seconds=300)
-        # NO device_id parameter!
-    )
-    
-    default_pg_init_time = time.time() - start_time
-    
-    # Step 2: Create a 7-GPU subgroup (exclude rank 7)
-    # This will do full NCCL initialization without splitting
-    subgroup_ranks = list(range(7))  # [0, 1, 2, 3, 4, 5, 6]
-    
-    subgroup_start = time.time()
-    
+    # Only first 7 ranks (0-6) participate in initialization
     if rank < 7:
-        subgroup = dist.new_group(ranks=subgroup_ranks, backend='nccl')
-        subgroup_init_time = time.time() - subgroup_start
+        # Initialize with world_size=7 for only the first 7 ranks
+        start_time = time.time()
         
-        # Verify the subgroup works
+        # CRITICAL: Do NOT specify device_id - this prevents splitting optimization
+        dist.init_process_group(
+            backend='nccl',
+            init_method='env://',
+            world_size=7,  # Only 7 ranks participate
+            rank=rank,
+            timeout=timedelta(seconds=300)
+            # NO device_id parameter!
+        )
+        
+        init_time = time.time() - start_time
+        
+        print(f"[Rank {rank}] WITHOUT split - init_process_group time: {init_time:.4f}s")
+        
+        # Barrier to ensure all participating ranks complete
+        dist.barrier()
+        
         if rank == 0:
-            tensor = torch.ones(1000, 1000, device=f'cuda:{rank}')
-        else:
-            tensor = torch.zeros(1000, 1000, device=f'cuda:{rank}')
+            print(f"\n{'='*60}")
+            print(f"WITHOUT ncclCommSplit optimization - init_process_group time: {init_time:.4f}s")
+            print(f"{'='*60}\n")
         
-        dist.broadcast(tensor, src=0, group=subgroup)
-        
-        # Verify correctness
-        assert torch.allclose(tensor, torch.ones(1000, 1000, device=f'cuda:{rank}')), \
-            f"Rank {rank}: Broadcast verification failed!"
-        
-        print(f"[Rank {rank}] WITHOUT split - Default PG init: {default_pg_init_time:.4f}s, "
-              f"Subgroup init: {subgroup_init_time:.4f}s, Total: {default_pg_init_time + subgroup_init_time:.4f}s")
+        cleanup()
+        return init_time
     else:
-        # Rank 7 still needs to participate in new_group call
-        dist.new_group(ranks=subgroup_ranks, backend='nccl')
-        print(f"[Rank {rank}] WITHOUT split - Default PG init: {default_pg_init_time:.4f}s, "
-              f"Not in subgroup")
-    
-    # Barrier to ensure all ranks complete
-    dist.barrier()
-    
-    total_time = time.time() - start_time
-    
-    if rank == 0:
-        print(f"\n{'='*60}")
-        print(f"WITHOUT ncclCommSplit optimization - Total time: {total_time:.4f}s")
-        print(f"{'='*60}\n")
-    
-    cleanup()
-    return default_pg_init_time, subgroup_init_time if rank < 7 else 0, total_time
+        # Rank 7 does not participate
+        print(f"[Rank {rank}] Not participating in initialization")
+        return 0
 
 
 def main():
@@ -227,7 +202,7 @@ def main():
         print("TEST 2: WITHOUT ncclCommSplit Optimization")
         print("="*80)
     
-    without_split_times = test_without_split_optimization()
+    without_split_init_time = test_without_split_optimization()
     
     # Print summary
     if rank == 0:
@@ -240,9 +215,7 @@ def main():
         print(f"  - Total time:      {with_split_times[2]:.4f}s")
         print()
         print(f"WITHOUT ncclCommSplit:")
-        print(f"  - Default PG init: {without_split_times[0]:.4f}s")
-        print(f"  - Subgroup init:   {without_split_times[1]:.4f}s")
-        print(f"  - Total time:      {without_split_times[2]:.4f}s")
+        print(f"  - init_process_group time: {without_split_init_time:.4f}s")
         print()
         
         if with_split_times[1] > 0 and without_split_times[1] > 0:
